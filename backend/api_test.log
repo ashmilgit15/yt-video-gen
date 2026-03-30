@@ -1,0 +1,8 @@
+INFO:     Started server process [10900]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:53978 - "POST /create-video HTTP/1.1" 200 OK
+Running ffmpeg for scene 0
+Running concat for session api_test
+INFO:     127.0.0.1:53979 - "GET /job-status/a0dcad9e-2251-49d5-8e11-a621b0e06a4e HTTP/1.1" 200 OK
