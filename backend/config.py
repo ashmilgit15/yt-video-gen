@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -47,6 +48,21 @@ class Settings:
     upload_retry_base_seconds: int = _env_int("UPLOAD_RETRY_BASE_SECONDS", 30)
     upload_retry_max_seconds: int = _env_int("UPLOAD_RETRY_MAX_SECONDS", 900)
     upload_retry_default_attempts: int = _env_int("UPLOAD_RETRY_DEFAULT_ATTEMPTS", 3)
+    image_generation_timeout_seconds: int = _env_int(
+        "IMAGE_GENERATION_TIMEOUT_SECONDS", 35
+    )
+    image_generation_connect_timeout_seconds: int = _env_int(
+        "IMAGE_GENERATION_CONNECT_TIMEOUT_SECONDS", 10
+    )
+    image_generation_max_retries: int = _env_int("IMAGE_GENERATION_MAX_RETRIES", 2)
+    scene_concurrency: int = max(1, _env_int("SCENE_CONCURRENCY", 2))
+    pollinations_min_interval_seconds: int = _env_int(
+        "POLLINATIONS_MIN_INTERVAL_SECONDS", 5
+    )
+    pollinations_referrer: str = os.getenv("POLLINATIONS_REFERRER", "localhost")
+    pollinations_model: str = os.getenv("POLLINATIONS_MODEL", "flux")
+    image_generation_width: int = _env_int("IMAGE_GENERATION_WIDTH", 1024)
+    image_generation_height: int = _env_int("IMAGE_GENERATION_HEIGHT", 1792)
 
     @property
     def cors_origins(self) -> list[str]:
@@ -83,6 +99,11 @@ class Settings:
     @property
     def is_s3_storage(self) -> bool:
         return self.storage_backend == "s3"
+
+    @property
+    def frontend_host(self) -> str:
+        parsed = urlparse(self.frontend_url)
+        return parsed.netloc or parsed.path or "localhost"
 
 
 settings = Settings()

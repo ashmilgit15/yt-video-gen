@@ -3,9 +3,18 @@ import { Wand2 } from 'lucide-react';
 
 export default function InputPanel({ onSubmit, disabled }) {
   const [topic, setTopic] = useState('');
-  const [style, setStyle] = useState('Educational');
+  const [style, setStyle] = useState('Cinematic Facts');
   const [duration, setDuration] = useState('30s');
   const [voice, setVoice] = useState('Sarah');
+
+  const styleOptions = [
+    'Cinematic Facts',
+    'Educational',
+    'Myth-Busting',
+    'Story',
+    'Fast-Paced Listicle',
+    'Motivational',
+  ];
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -32,7 +41,7 @@ export default function InputPanel({ onSubmit, disabled }) {
             required
           />
           <p className="text-xs text-slate-400 mt-2">
-            💡 Tip: Start with a question or shocking fact for best results
+            Built for hook-first scripts, cinematic visuals, animated captions, and stronger retention.
           </p>
         </div>
 
@@ -45,9 +54,9 @@ export default function InputPanel({ onSubmit, disabled }) {
               onChange={(e) => setStyle(e.target.value)}
               disabled={disabled}
             >
-              <option>Educational</option>
-              <option>Story</option>
-              <option>Listicle</option>
+              {styleOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
             </select>
           </div>
           
@@ -61,6 +70,7 @@ export default function InputPanel({ onSubmit, disabled }) {
             >
               <option value="15s">15 Seconds</option>
               <option value="30s">30 Seconds</option>
+              <option value="45s">45 Seconds</option>
               <option value="60s">60 Seconds</option>
             </select>
           </div>

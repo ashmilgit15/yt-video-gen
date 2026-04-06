@@ -24,17 +24,57 @@ class ScriptResponse(BaseModel):
 
 
 async def generate_script(topic: str, style: str, duration: str) -> dict:
+    scene_target = {
+        "15s": "3-4 scenes total",
+        "30s": "5-7 scenes total",
+        "45s": "6-8 scenes total",
+        "60s": "7-10 scenes total",
+    }.get(duration, "6-8 scenes total")
+
     prompt = f"""
-    You are a YouTube Shorts script writer. Write punchy, fast-paced scripts 
-    optimized for vertical short-form video about '{topic}'. 
-    The style should be {style}.
-    Max {duration} total duration. Each scene should be 5-10 seconds. 
-    Scene count: 6–10 scenes max (to fit within 60s).
-    Use a hook in scene 1 that grabs attention in the first 3 seconds. 
-    End with a CTA like 'Follow for more'.
-    
-    Break the script down into individual scenes. For each scene, provide the 'scene_number', 
-    the 'narration' (what the voiceover will say), and an 'image_prompt' (a detailed visual description for an AI image generator).
+    You are an elite YouTube Shorts scriptwriter and storyboard artist.
+    Create a retention-first vertical short about '{topic}'.
+
+    Style: {style}
+    Max total duration: {duration}
+    Target pacing: {scene_target}
+
+    Hard rules:
+    - Scene 1 must open with a scroll-stopping hook in the first 1-2 seconds.
+    - Never start with phrases like 'In this video' or 'Today we're going to'.
+    - Each scene should deliver one idea only and feel visually different from the last.
+    - All scenes must still belong to one cohesive visual world with consistent style, lighting logic, and color mood.
+    - Narration must sound natural with TTS: short clauses, conversational wording, strong rhythm.
+    - Keep most narration lines under 14 spoken words.
+    - Add a pattern interrupt every 2-3 scenes: contrast, reveal, question, or surprising payoff.
+    - End with a crisp CTA that feels earned.
+    - Vary the CTA style based on content: curiosity, utility, challenge, identity, or proof-loop.
+    - Avoid repeating generic lines like 'Follow for more' unless it is clearly the strongest choice.
+    - Keep the CTA short, natural, and under 10 spoken words.
+
+    Break the script down into individual scenes. For each scene, provide:
+    - 'scene_number'
+    - 'narration'
+    - 'image_prompt'
+
+    The image_prompt must describe one cinematic vertical shot only.
+    It should include:
+    - the subject
+    - the action
+    - framing / camera angle
+    - lighting
+    - setting
+    - mood
+    - one realistic detail that makes the shot feel premium
+
+    The image_prompt must NOT mention:
+    - text overlays
+    - captions
+    - split screens
+    - collages
+    - UI elements
+    - watermarks
+
     The response MUST be a valid JSON object matching the following structure:
     {{
         "title": "A catchy title",

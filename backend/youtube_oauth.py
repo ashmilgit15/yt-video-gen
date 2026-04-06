@@ -1,4 +1,5 @@
 from datetime import timezone
+import secrets
 
 from cryptography.fernet import Fernet
 from google.oauth2.credentials import Credentials
@@ -28,7 +29,12 @@ def decrypt_token(value: str | None) -> str | None:
     return _get_cipher().decrypt(value.encode("utf-8")).decode("utf-8")
 
 
-def _build_flow(state: str | None = None) -> Flow:
+def generate_code_verifier() -> str:
+    # PKCE requires a high-entropy verifier between 43 and 128 chars.
+    return secrets.token_urlsafe(72)
+
+
+def _build_flow(state: str | None = None, code_verifier: str | None = None) -> Flow:
     client_config = settings.google_client_config
     if client_config is None:
         raise RuntimeError(
@@ -36,24 +42,28 @@ def _build_flow(state: str | None = None) -> Flow:
         )
 
     flow = Flow.from_client_config(
-        client_config, scopes=settings.google_oauth_scopes, state=state
+        client_config,
+        scopes=settings.google_oauth_scopes,
+        state=state,
+        code_verifier=code_verifier,
     )
     flow.redirect_uri = settings.google_redirect_uri
     return flow
 
 
-def build_google_auth_url(state: str) -> str:
-    flow = _build_flow(state)
+def build_google_auth_url(state: str, code_verifier: str) -> str:
+    flow = _build_flow(state, code_verifier)
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent select_account",
+        code_challenge_method="S256",
     )
     return auth_url
 
 
-def exchange_code_for_account(code: str, state: str) -> dict:
-    flow = _build_flow(state)
+def exchange_code_for_account(code: str, state: str, code_verifier: str) -> dict:
+    flow = _build_flow(state, code_verifier)
     flow.fetch_token(code=code)
     credentials = flow.credentials
 
@@ -103,6 +113,11 @@ def build_google_credentials(account) -> Credentials:
     )
 
     if account.token_expires_at is not None:
-        credentials.expiry = account.token_expires_at
+        expiry = account.token_expires_at
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        else:
+            expiry = expiry.astimezone(timezone.utc)
+        credentials.expiry = expiry
 
     return credentials

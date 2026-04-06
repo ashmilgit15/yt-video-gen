@@ -14,15 +14,22 @@ import PublishPanel from './components/PublishPanel';
 import {
   configureApiAuth,
   disconnectYoutubeAccount,
+  downloadThumbnail,
+  downloadThumbnailVariant,
   downloadVideo,
   generateScript,
   getApiOrigin,
+  getChannelPreview,
   getCurrentUser,
   getVideo,
   getYoutubeAccounts,
+  regenerateThumbnailVariants,
+  regenerateUploadMetadata,
   renderVideo,
   retryUpload,
   startYoutubeConnect,
+  updateYoutubeAccountPreset,
+  updatePublishSelection,
   uploadVideoToYoutube,
 } from './api';
 import './App.css';
@@ -47,9 +54,17 @@ function App() {
   const [progress, setProgress] = useState({ completed: 0, total: 0 });
   const [videoData, setVideoData] = useState(null);
   const [videoUrl, setVideoUrl] = useState('');
+  const [thumbnailUrl, setThumbnailUrl] = useState('');
+  const [thumbnailVariants, setThumbnailVariants] = useState([]);
   const [youtubeAccounts, setYoutubeAccounts] = useState([]);
+  const [channelPreviews, setChannelPreviews] = useState({});
   const [selectedAccountIds, setSelectedAccountIds] = useState([]);
   const [publishAt, setPublishAt] = useState('');
+  const [privacyStatus, setPrivacyStatus] = useState('channel_default');
+  const [savingSelection, setSavingSelection] = useState(false);
+  const [savingPresetId, setSavingPresetId] = useState('');
+  const [refreshingMetadata, setRefreshingMetadata] = useState(false);
+  const [refreshingThumbnails, setRefreshingThumbnails] = useState(false);
 
   const activeUploads = useMemo(
     () => (videoData?.uploads || []).filter((upload) => ACTIVE_UPLOAD_STATUSES.has(upload.status)),
@@ -60,11 +75,17 @@ function App() {
 
   useEffect(() => {
     if (!isLoaded) {
+      configureApiAuth(null);
+      return;
+    }
+
+    if (!userId) {
+      configureApiAuth(null);
       return;
     }
 
     configureApiAuth(() => getToken());
-  }, [getToken, isLoaded]);
+  }, [getToken, isLoaded, userId]);
 
   useEffect(() => {
     if (!isLoaded || !userId) {
@@ -110,13 +131,20 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!videoId || step !== 'generating' && activeUploads.length === 0) {
+    if (!isLoaded || !userId || !videoId || step !== 'generating' && activeUploads.length === 0) {
       return;
     }
 
-    const interval = setInterval(async () => {
+    let cancelled = false;
+    let timeoutId = null;
+
+    const poll = async () => {
       try {
         const currentVideo = await getVideo(videoId);
+        if (cancelled) {
+          return;
+        }
+
         setVideoData(currentVideo);
         setProgress(currentVideo.progress);
 
@@ -126,19 +154,38 @@ function App() {
 
         if (currentVideo.render_status === 'completed') {
           setStep('done');
+          return;
         }
 
         if (currentVideo.render_status === 'failed') {
           setError(currentVideo.error_message || 'Video rendering failed.');
           setStep('script_review');
+          return;
         }
       } catch (pollError) {
-        console.error('Polling error', pollError);
-      }
-    }, 2000);
+        if (cancelled) {
+          return;
+        }
 
-    return () => clearInterval(interval);
-  }, [activeUploads.length, step, videoId]);
+        if (pollError?.response?.status !== 401 && pollError?.message !== 'Authentication token is not ready.') {
+          console.error('Polling error', pollError);
+        }
+      }
+
+      if (!cancelled) {
+        timeoutId = window.setTimeout(poll, 2000);
+      }
+    };
+
+    poll();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [activeUploads.length, isLoaded, step, userId, videoId]);
 
   useEffect(() => {
     if (step !== 'done' || !videoId || videoUrl) {
@@ -167,12 +214,139 @@ function App() {
     };
   }, [step, videoId, videoUrl]);
 
+  useEffect(() => {
+    if (step !== 'done' || !videoId || thumbnailUrl || !videoData?.metadata?.thumbnail_available) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadThumbnailBlob = async () => {
+      try {
+        const blobUrl = await downloadThumbnail(videoId);
+        if (cancelled) {
+          URL.revokeObjectURL(blobUrl);
+          return;
+        }
+        setThumbnailUrl(blobUrl);
+      } catch {
+        // Thumbnail is optional; keep the rest of the UI usable.
+      }
+    };
+
+    loadThumbnailBlob();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [step, thumbnailUrl, videoData, videoId]);
+
+  useEffect(() => {
+    if (step !== 'done' || !videoId || thumbnailVariants.length || !videoData?.metadata?.thumbnail_variants?.length) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadThumbnailVariants = async () => {
+      try {
+        const variants = await Promise.all(
+          videoData.metadata.thumbnail_variants.map(async (variant) => ({
+            ...variant,
+            url: await downloadThumbnailVariant(videoId, variant.name),
+          })),
+        );
+
+        if (cancelled) {
+          variants.forEach((variant) => URL.revokeObjectURL(variant.url));
+          return;
+        }
+
+        setThumbnailVariants(variants);
+      } catch {
+        // Optional enhancement; ignore failures.
+      }
+    };
+
+    loadThumbnailVariants();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [step, thumbnailVariants.length, videoData, videoId]);
+
+  useEffect(() => {
+    const suggestedPrivacy = videoData?.upload_metadata?.suggested_privacy_status;
+    if (suggestedPrivacy && privacyStatus !== 'channel_default') {
+      setPrivacyStatus(suggestedPrivacy);
+    }
+  }, [privacyStatus, videoData?.upload_metadata?.suggested_privacy_status]);
+
   const refreshYoutubeAccounts = async () => {
     const data = await getYoutubeAccounts();
     setYoutubeAccounts(data.accounts || []);
     setSelectedAccountIds((current) =>
       current.filter((accountId) => (data.accounts || []).some((account) => account.id === accountId)),
     );
+  };
+
+  useEffect(() => {
+    if (!videoId || !selectedAccountIds.length || !videoData?.upload_metadata) {
+      setChannelPreviews({});
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadPreviews = async () => {
+      try {
+        const previewEntries = await Promise.all(
+          selectedAccountIds.map(async (accountId) => [accountId, await getChannelPreview(videoId, accountId)]),
+        );
+        if (!cancelled) {
+          setChannelPreviews(Object.fromEntries(previewEntries));
+        }
+      } catch {
+        if (!cancelled) {
+          setChannelPreviews({});
+        }
+      }
+    };
+
+    loadPreviews();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAccountIds, videoData?.upload_metadata, videoId]);
+
+  const handleSaveChannelPreset = async (accountId, preset) => {
+    setSavingPresetId(accountId);
+    setError('');
+    try {
+      const updatedAccount = await updateYoutubeAccountPreset(accountId, preset);
+      setYoutubeAccounts((current) => current.map((account) => (account.id === accountId ? updatedAccount : account)));
+      if (videoId && videoData?.upload_metadata) {
+        const preview = await getChannelPreview(videoId, accountId);
+        setChannelPreviews((current) => ({ ...current, [accountId]: preview }));
+      }
+    } catch (presetError) {
+      setError(presetError?.response?.data?.detail || 'Failed to save channel preset.');
+    } finally {
+      setSavingPresetId('');
+    }
+  };
+
+  const handleUseSuggestedSchedule = (accountId) => {
+    const suggestion = channelPreviews[accountId]?.channel_schedule?.suggested_publish_at
+      || youtubeAccounts.find((account) => account.id === accountId)?.schedule_recommendation?.suggested_publish_at;
+    if (!suggestion) {
+      return;
+    }
+    const localValue = new Date(suggestion);
+    const offsetMs = localValue.getTimezoneOffset() * 60 * 1000;
+    const normalized = new Date(localValue.getTime() - offsetMs).toISOString().slice(0, 16);
+    setPublishAt(normalized);
   };
 
   const handleGenerateScript = async (config) => {
@@ -199,6 +373,7 @@ function App() {
     setStep('generating');
     setError('');
     setVideoUrl('');
+    resetThumbnailObjects();
     setProgress({ completed: 0, total: script.scenes.length * 2 });
 
     try {
@@ -255,7 +430,7 @@ function App() {
 
     try {
       const publishAtIso = publishAt ? new Date(publishAt).toISOString() : null;
-      const data = await uploadVideoToYoutube(videoId, selectedAccountIds, 'private', publishAtIso);
+      const data = await uploadVideoToYoutube(videoId, selectedAccountIds, privacyStatus, publishAtIso);
       setVideoData((current) => ({
         ...(current || {}),
         uploads: [...(current?.uploads || []), ...(data.uploads || [])],
@@ -289,10 +464,103 @@ function App() {
     }
   };
 
+  const resetThumbnailObjects = () => {
+    if (thumbnailUrl) {
+      URL.revokeObjectURL(thumbnailUrl);
+    }
+
+    thumbnailVariants.forEach((variant) => {
+      if (variant.url) {
+        URL.revokeObjectURL(variant.url);
+      }
+    });
+
+    setThumbnailUrl('');
+    setThumbnailVariants([]);
+  };
+
+  const handleSelectTitle = async (selectedTitle) => {
+    if (!videoId || !selectedTitle) {
+      return;
+    }
+
+    setSavingSelection(true);
+    setError('');
+    try {
+      const updatedVideo = await updatePublishSelection(videoId, { selected_title: selectedTitle });
+      setVideoData(updatedVideo);
+    } catch (selectionError) {
+      setError(selectionError?.response?.data?.detail || 'Failed to save the selected title.');
+    } finally {
+      setSavingSelection(false);
+    }
+  };
+
+  const handleSelectThumbnail = async (variantName) => {
+    if (!videoId || !variantName) {
+      return;
+    }
+
+    setSavingSelection(true);
+    setError('');
+    try {
+      const updatedVideo = await updatePublishSelection(videoId, { selected_thumbnail_variant: variantName });
+      setVideoData(updatedVideo);
+      const chosenVariant = thumbnailVariants.find((variant) => variant.name === variantName);
+      if (chosenVariant?.url) {
+        if (thumbnailUrl && thumbnailUrl !== chosenVariant.url) {
+          URL.revokeObjectURL(thumbnailUrl);
+        }
+        setThumbnailUrl(chosenVariant.url);
+      }
+    } catch (selectionError) {
+      setError(selectionError?.response?.data?.detail || 'Failed to save the selected thumbnail.');
+    } finally {
+      setSavingSelection(false);
+    }
+  };
+
+  const handleRegenerateMetadata = async () => {
+    if (!videoId) {
+      return;
+    }
+
+    setRefreshingMetadata(true);
+    setError('');
+    try {
+      const updatedVideo = await regenerateUploadMetadata(videoId);
+      setVideoData(updatedVideo);
+    } catch (metadataError) {
+      setError(metadataError?.response?.data?.detail || 'Failed to regenerate metadata.');
+    } finally {
+      setRefreshingMetadata(false);
+    }
+  };
+
+  const handleRegenerateThumbnails = async () => {
+    if (!videoId) {
+      return;
+    }
+
+    setRefreshingThumbnails(true);
+    setError('');
+    try {
+      resetThumbnailObjects();
+      const updatedVideo = await regenerateThumbnailVariants(videoId);
+      setVideoData(updatedVideo);
+    } catch (thumbnailError) {
+      setError(thumbnailError?.response?.data?.detail || 'Failed to regenerate thumbnails.');
+    } finally {
+      setRefreshingThumbnails(false);
+    }
+  };
+
   const handleReset = () => {
     if (videoUrl) {
       URL.revokeObjectURL(videoUrl);
     }
+
+    resetThumbnailObjects();
 
     setStep('input');
     setError('');
@@ -300,8 +568,10 @@ function App() {
     setVideoId('');
     setVideoData(null);
     setVideoUrl('');
+    setChannelPreviews({});
     setSelectedAccountIds([]);
     setPublishAt('');
+    setPrivacyStatus('channel_default');
     setProgress({ completed: 0, total: 0 });
   };
 
@@ -408,18 +678,33 @@ function App() {
               {step === 'done' && videoData && (
                 <>
                   <ProgressTracker step="done" progress={progress} />
-                  <VideoPlayer url={videoUrl} metadata={videoData.metadata} onReset={handleReset} />
+                  <VideoPlayer url={videoUrl} thumbnailUrl={thumbnailUrl} thumbnailVariants={thumbnailVariants} metadata={videoData.metadata} onReset={handleReset} />
                   <PublishPanel
                     accounts={youtubeAccounts}
+                    channelPreviews={channelPreviews}
                     selectedAccountIds={selectedAccountIds}
                     uploads={videoData.uploads || []}
                     connecting={connectingAccount}
                     uploading={queueingUpload}
+                    metadata={videoData.upload_metadata}
+                    thumbnailVariants={thumbnailVariants}
                     publishAt={publishAt}
+                    privacyStatus={privacyStatus}
+                    savingSelection={savingSelection}
+                    savingPresetId={savingPresetId}
+                    refreshingMetadata={refreshingMetadata}
+                    refreshingThumbnails={refreshingThumbnails}
                     onToggleAccount={handleToggleAccount}
                     onConnect={handleConnectYoutube}
                     onDisconnect={handleDisconnectYoutube}
                     onPublishAtChange={setPublishAt}
+                    onPrivacyStatusChange={setPrivacyStatus}
+                    onSaveChannelPreset={handleSaveChannelPreset}
+                    onSelectTitle={handleSelectTitle}
+                    onSelectThumbnail={handleSelectThumbnail}
+                    onUseSuggestedSchedule={handleUseSuggestedSchedule}
+                    onRegenerateMetadata={handleRegenerateMetadata}
+                    onRegenerateThumbnails={handleRegenerateThumbnails}
                     onUpload={handleUploadVideo}
                     onRetryUpload={handleRetryUpload}
                   />

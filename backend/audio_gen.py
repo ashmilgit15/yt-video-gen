@@ -74,6 +74,13 @@ def get_kokoro():
 import random
 
 
+def _format_error(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return message
+    return repr(exc)
+
+
 async def get_audio_duration(audio_path: str, text: str) -> float:
     if FFPROBE is None:
         return max(1.0, len(text) / 15.0)
@@ -109,7 +116,7 @@ async def generate_audio_edge(
     """Fallback using edge-tts with retries"""
     print(f"Generating audio with Edge TTS for {filename}...")
 
-    max_retries = 3
+    max_retries = 5
     for attempt in range(max_retries):
         try:
             # Add small random jitter to prevent hitting rate limits perfectly concurrently
@@ -119,10 +126,15 @@ async def generate_audio_edge(
             break
         except Exception as e:
             if attempt == max_retries - 1:
-                print(f"Edge TTS failed after {max_retries} attempts: {e}")
+                print(
+                    f"Edge TTS failed after {max_retries} attempts: {_format_error(e)}"
+                )
                 raise e
-            print(f"Edge TTS attempt {attempt + 1} failed, retrying... ({e})")
-            await asyncio.sleep(1.0)
+            print(
+                "Edge TTS attempt "
+                f"{attempt + 1} failed, retrying... ({_format_error(e)})"
+            )
+            await asyncio.sleep(1.5 * (attempt + 1))
 
     duration = await get_audio_duration(filename, text)
     return filename, duration
@@ -150,30 +162,52 @@ async def generate_audio(
         "aria": "en-US-AriaNeural",
     }
 
-    if default_tts == "kokoro" and KOKORO_AVAILABLE:
+    async def try_kokoro() -> dict | None:
+        if not KOKORO_AVAILABLE:
+            return None
+
         kokoro_ready = await ensure_kokoro_models()
-        if kokoro_ready:
-            try:
-                kokoro_voice = voice_map_kokoro.get(voice.lower(), "af_bella")
-                print(f"Generating audio with Kokoro for {filename}.wav...")
-                kokoro = get_kokoro()
+        if not kokoro_ready:
+            return None
 
-                # Kokoro generation
-                samples, sample_rate = kokoro.create(
-                    text, voice=kokoro_voice, speed=1.0, lang="en-us"
-                )
-                wav_filename = f"{filename}.wav"
-                sf.write(wav_filename, samples, sample_rate)
+        kokoro_voice = voice_map_kokoro.get(voice.lower(), "af_bella")
+        print(f"Generating audio with Kokoro for {filename}.wav...")
+        kokoro = get_kokoro()
+        samples, sample_rate = kokoro.create(
+            text, voice=kokoro_voice, speed=1.0, lang="en-us"
+        )
+        wav_filename = f"{filename}.wav"
+        sf.write(wav_filename, samples, sample_rate)
+        duration = len(samples) / sample_rate
+        return {"path": wav_filename, "duration": duration}
 
-                # Get duration
-                duration = len(samples) / sample_rate
-                return {"path": wav_filename, "duration": duration}
-
-            except Exception as e:
-                print(f"Kokoro generation failed: {e}. Falling back to Edge TTS.")
+    if default_tts == "kokoro" and KOKORO_AVAILABLE:
+        try:
+            kokoro_result = await try_kokoro()
+            if kokoro_result is not None:
+                return kokoro_result
+        except Exception as e:
+            print(
+                f"Kokoro generation failed: {_format_error(e)}. Falling back to Edge TTS."
+            )
 
     # Edge TTS fallback
     mp3_filename = f"{filename}.mp3"
     edge_voice = voice_map_edge.get(voice.lower(), "en-US-AriaNeural")
-    path, duration = await generate_audio_edge(text, mp3_filename, edge_voice)
-    return {"path": path, "duration": duration}
+
+    try:
+        path, duration = await generate_audio_edge(text, mp3_filename, edge_voice)
+        return {"path": path, "duration": duration}
+    except Exception as edge_error:
+        if default_tts != "kokoro":
+            try:
+                kokoro_result = await try_kokoro()
+                if kokoro_result is not None:
+                    print("Edge TTS failed, using Kokoro fallback.")
+                    return kokoro_result
+            except Exception as kokoro_error:
+                print(
+                    "Kokoro fallback after Edge TTS failure also failed: "
+                    f"{_format_error(kokoro_error)}"
+                )
+        raise edge_error

@@ -84,7 +84,21 @@ def _sleep_for_retry(attempt: int) -> None:
 
 
 def _refresh_credentials(account):
+    expiry = getattr(account, "token_expires_at", None)
+    if expiry is not None:
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        else:
+            expiry = expiry.astimezone(timezone.utc)
+        account.token_expires_at = expiry
+
     credentials = build_google_credentials(account)
+    if credentials.expiry is not None:
+        if credentials.expiry.tzinfo is None:
+            credentials.expiry = credentials.expiry.replace(tzinfo=timezone.utc)
+        else:
+            credentials.expiry = credentials.expiry.astimezone(timezone.utc)
+
     if credentials.expired and credentials.refresh_token:
         credentials.refresh(GoogleRequest())
     return credentials

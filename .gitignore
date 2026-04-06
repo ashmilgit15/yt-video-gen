@@ -1,0 +1,17 @@
+# Root-level local env and secret files
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+secrets/
+
+# Local caches and generated backend artifacts
+.ruff_cache/
+backend/storage/
+backend/tmp/
+backend/api_test.log

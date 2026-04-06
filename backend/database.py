@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from config import settings
@@ -20,7 +21,11 @@ def _normalize_database_url(database_url: str | None) -> str | None:
 
 engine = (
     create_engine(
-        _normalize_database_url(settings.database_url), pool_pre_ping=True, future=True
+        _normalize_database_url(settings.database_url),
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_use_lifo=True,
+        future=True,
     )
     if settings.database_url
     else None
@@ -109,8 +114,16 @@ def init_db() -> None:
         )
         connection.execute(
             text(
+                "ALTER TABLE youtube_accounts ADD COLUMN IF NOT EXISTS channel_preset_json JSONB"
+            )
+        )
+        connection.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS idx_uploads_status_retry ON uploads (status, next_retry_at)"
             )
+        )
+        connection.execute(
+            text("ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS code_verifier TEXT")
         )
 
 
@@ -120,4 +133,8 @@ def get_db():
     try:
         yield db
     finally:
-        db.close()
+        try:
+            db.close()
+        except SQLAlchemyError:
+            if engine is not None:
+                engine.dispose()
